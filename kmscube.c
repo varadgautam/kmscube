@@ -26,6 +26,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <assert.h>
 #include <fcntl.h>
 #include <string.h>
 #include <stdio.h>
@@ -232,9 +233,11 @@ static int
 get_modifiers(uint64_t **mods)
 {
 	/* magic interface from krh goes here */
-	static uint64_t modifiers[] = {I915_FORMAT_MOD_Y_TILED};
+	static uint64_t modifiers[] = {I915_FORMAT_MOD_Y_TILED, /* I915_FORMAT_MOD_CCS */ fourcc_mod_code(INTEL, 4)};
 	*mods = modifiers;
-	return 1;
+
+	/* Change this to 1 to force Y tiled */
+	return 2;
 }
 
 static int init_gbm(void)
@@ -618,7 +621,7 @@ drm_fb_destroy_callback(struct gbm_bo *bo, void *data)
 static struct drm_fb * drm_fb_get_from_bo(struct gbm_bo *bo)
 {
 	struct drm_fb *fb = gbm_bo_get_user_data(bo);
-	uint32_t width, height, stride, handle;
+	uint32_t width, height, strides[4]={0}, handles[4] = {0}, offsets[4] = {0}, flags = 0;
 	int ret;
 
 	if (fb)
@@ -629,10 +632,40 @@ static struct drm_fb * drm_fb_get_from_bo(struct gbm_bo *bo)
 
 	width = gbm_bo_get_width(bo);
 	height = gbm_bo_get_height(bo);
-	stride = gbm_bo_get_stride(bo);
-	handle = gbm_bo_get_handle(bo).u32;
 
-	ret = drmModeAddFB(drm.fd, width, height, 24, 32, stride, handle, &fb->fb_id);
+#ifndef HAVE_GBM_MODIFIERS
+	strides[0] = gbm_bo_get_stride(bo);
+	handles[0] = gbm_bo_get_handle(bo).u32;
+	ret = -1;
+#else
+	uint64_t modifiers[4] = {0};
+	modifiers[0] = gbm_bo_get_modifier(bo);
+	const int num_planes = gbm_bo_get_plane_count(bo);
+	for (int i = 0; i < num_planes; i++) {
+		strides[i] = gbm_bo_get_stride_for_plane(bo, i);
+		handles[i] = gbm_bo_get_handle(bo).u32;
+		offsets[i] = gbm_bo_get_offset(bo, i);
+		modifiers[i] = modifiers[0];
+	}
+
+	if (modifiers[0]) {
+		flags = DRM_MODE_FB_MODIFIERS;
+		printf("Using modifier %llx\n", modifiers[0]);
+	}
+
+	ret = drmModeAddFB2WithModifiers(drm.fd, width, height,
+					 DRM_FORMAT_XRGB8888, handles, strides,
+					 offsets, modifiers, &fb->fb_id, flags);
+#endif
+	if (ret) {
+		if (flags)
+			fprintf(stderr, "Modifiers failed!\n");
+		flags = 0;
+		ret = drmModeAddFB2(drm.fd, width, height,
+				DRM_FORMAT_XRGB8888, handles,
+				strides, offsets, &fb->fb_id, 0);
+	}
+
 	if (ret) {
 		printf("failed to create fb: %s\n", strerror(errno));
 		free(fb);

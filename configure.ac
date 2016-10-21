@@ -45,6 +45,22 @@ PKG_CHECK_MODULES(GBM, gbm)
 PKG_CHECK_MODULES(EGL, egl)
 PKG_CHECK_MODULES(GLES2, glesv2)
 
+AC_CHECK_LIB([gbm], [gbm_bo_get_modifier], [gbm_modifiers=yes], [])
+
+AC_ARG_ENABLE([gbm-modifiers],
+	      [AS_HELP_STRING([--enable-gbm-modifiers],
+	          [enable using GBM modifiers @<:@default=auto@:>@])],
+	      [enable_gbm_modifiers="$enableval"],
+	      [enable_gbm_modifiers=auto])
+
+if test "x$enable_gbm_modifiers" = xyes -a "x$gbm_modifiers" != xyes; then
+	AC_MSG_ERROR([Cannot find gbm modifier supported mesa])
+fi
+
+if test "x$gbm_modifiers" = xyes; then
+	AC_DEFINE(HAVE_GBM_MODIFIERS, 1, [Define if you can use GBM properties.])
+fi
+
 dnl ===========================================================================
 dnl check compiler flags
 AC_DEFUN([LIBDRM_CC_TRY_FLAG], [

@@ -44,6 +44,10 @@
 
 #include "esUtil.h"
 
+#ifdef HAVE_CONFIG_H
+  #include "config.h"
+#endif
+
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 

@@ -34,6 +34,7 @@
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+#include <drm_fourcc.h>
 #include <gbm.h>
 
 #define GL_GLEXT_PROTOTYPES 1
@@ -227,14 +228,34 @@ static int init_drm(void)
 	return 0;
 }
 
+static int
+get_modifiers(uint64_t **mods)
+{
+	/* magic interface from krh goes here */
+	static uint64_t modifiers[] = {I915_FORMAT_MOD_Y_TILED};
+	*mods = modifiers;
+	return 1;
+}
+
 static int init_gbm(void)
 {
 	gbm.dev = gbm_create_device(drm.fd);
 
+#ifndef HAVE_GBM_MODIFIERS
 	gbm.surface = gbm_surface_create(gbm.dev,
 			drm.mode->hdisplay, drm.mode->vdisplay,
 			GBM_FORMAT_XRGB8888,
 			GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+#else
+	uint64_t *mods;
+	int count = get_modifiers(&mods);
+	gbm.surface =
+		gbm_surface_create_with_modifiers(gbm.dev,
+				drm.mode->hdisplay, drm.mode->vdisplay,
+				GBM_FORMAT_XRGB8888,
+				GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING,
+				mods, count);
+#endif
 	if (!gbm.surface) {
 		printf("failed to create gbm surface\n");
 		return -1;

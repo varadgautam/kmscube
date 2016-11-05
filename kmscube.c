@@ -670,6 +670,10 @@ int main(int argc, char *argv[])
 	eglSwapBuffers(gl.display, gl.surface);
 	bo = gbm_surface_lock_front_buffer(gbm.surface);
 	fb = drm_fb_get_from_bo(bo);
+	if (!fb) {
+		printf("Failed to get a new framebuffer BO\n");
+		return -1;
+	}
 
 	/* set mode: */
 	ret = drmModeSetCrtc(drm.fd, drm.crtc_id, fb->fb_id, 0, 0,
@@ -688,6 +692,11 @@ int main(int argc, char *argv[])
 		eglSwapBuffers(gl.display, gl.surface);
 		next_bo = gbm_surface_lock_front_buffer(gbm.surface);
 		fb = drm_fb_get_from_bo(next_bo);
+
+		if (!fb) {
+			printf("Failed to get a new framebuffer BO\n");
+			break;
+		}
 
 		/*
 		 * Here you could also update drm plane layers if you want

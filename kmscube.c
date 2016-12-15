@@ -52,7 +52,8 @@
 
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
-
+#define DIV_ROUND_UP(A, B) ((A) % (B) == 0 ? (A)/(B) : (A)/(B) + 1)
+#define ALIGN(v, a) ((v + a - 1) & ~(a - 1))
 
 static struct {
 	EGLDisplay display;
@@ -61,8 +62,14 @@ static struct {
 	EGLSurface surface;
 	GLuint program;
 	GLint modelviewmatrix, modelviewprojectionmatrix, normalmatrix;
+	GLint texture;
 	GLuint vbo;
-	GLuint positionsoffset, colorsoffset, normalsoffset;
+	GLuint positionsoffset, texcoordsoffset, normalsoffset;
+	GLuint tex[2];
+
+	PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR;
+	PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR;
+	PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES;
 } gl;
 
 static struct {
@@ -306,37 +313,37 @@ static int init_gl(void)
 			+1.0f, -1.0f, +1.0f,
 	};
 
-	static const GLfloat vColors[] = {
-			// front
-			0.0f,  0.0f,  1.0f, // blue
-			1.0f,  0.0f,  1.0f, // magenta
-			0.0f,  1.0f,  1.0f, // cyan
-			1.0f,  1.0f,  1.0f, // white
-			// back
-			1.0f,  0.0f,  0.0f, // red
-			0.0f,  0.0f,  0.0f, // black
-			1.0f,  1.0f,  0.0f, // yellow
-			0.0f,  1.0f,  0.0f, // green
-			// right
-			1.0f,  0.0f,  1.0f, // magenta
-			1.0f,  0.0f,  0.0f, // red
-			1.0f,  1.0f,  1.0f, // white
-			1.0f,  1.0f,  0.0f, // yellow
-			// left
-			0.0f,  0.0f,  0.0f, // black
-			0.0f,  0.0f,  1.0f, // blue
-			0.0f,  1.0f,  0.0f, // green
-			0.0f,  1.0f,  1.0f, // cyan
-			// top
-			0.0f,  1.0f,  1.0f, // cyan
-			1.0f,  1.0f,  1.0f, // white
-			0.0f,  1.0f,  0.0f, // green
-			1.0f,  1.0f,  0.0f, // yellow
-			// bottom
-			0.0f,  0.0f,  0.0f, // black
-			1.0f,  0.0f,  0.0f, // red
-			0.0f,  0.0f,  1.0f, // blue
-			1.0f,  0.0f,  1.0f  // magenta
+	GLfloat vTexCoords[] = {
+			//front
+			1.0f, 1.0f,
+			0.0f, 1.0f,
+			1.0f, 0.0f,
+			0.0f, 0.0f,
+			//back
+			1.0f, 1.0f,
+			0.0f, 1.0f,
+			1.0f, 0.0f,
+			0.0f, 0.0f,
+			//right
+			1.0f, 1.0f,
+			0.0f, 1.0f,
+			1.0f, 0.0f,
+			0.0f, 0.0f,
+			//left
+			1.0f, 1.0f,
+			0.0f, 1.0f,
+			1.0f, 0.0f,
+			0.0f, 0.0f,
+			//top
+			1.0f, 1.0f,
+			0.0f, 1.0f,
+			1.0f, 0.0f,
+			0.0f, 0.0f,
+			//bottom
+			1.0f, 0.0f,
+			0.0f, 0.0f,
+			1.0f, 1.0f,
+			0.0f, 1.0f,
 	};
 
 	static const GLfloat vNormals[] = {
@@ -394,11 +401,12 @@ static int init_gl(void)
 			"                                   \n"
 			"attribute vec4 in_position;        \n"
 			"attribute vec3 in_normal;          \n"
-			"attribute vec4 in_color;           \n"
-			"\n"
+			"attribute vec2 in_TexCoord;        \n"
+			"                                   \n"
 			"vec4 lightSource = vec4(2.0, 2.0, 20.0, 0.0);\n"
 			"                                   \n"
 			"varying vec4 vVaryingColor;        \n"
+			"varying vec2 vTexCoord;            \n"
 			"                                   \n"
 			"void main()                        \n"
 			"{                                  \n"
@@ -408,25 +416,38 @@ static int init_gl(void)
 			"    vec3 vPosition3 = vPosition4.xyz / vPosition4.w;\n"
 			"    vec3 vLightDir = normalize(lightSource.xyz - vPosition3);\n"
 			"    float diff = max(0.0, dot(vEyeNormal, vLightDir));\n"
-			"    vVaryingColor = vec4(diff * in_color.rgb, 1.0);\n"
-			"}                                  \n";
+			"    vVaryingColor = vec4(diff * vec3(1.0, 1.0, 1.0), 1.0);\n"
+			"    vTexCoord = in_TexCoord; \n"
+			"}                            \n";
 
 	static const char *fragment_shader_source =
+			"#extension GL_OES_EGL_image_external : enable\n"
 			"precision mediump float;           \n"
 			"                                   \n"
+			"uniform samplerExternalOES uTex;   \n"
+			"                                   \n"
 			"varying vec4 vVaryingColor;        \n"
+			"varying vec2 vTexCoord;            \n"
 			"                                   \n"
 			"void main()                        \n"
 			"{                                  \n"
-			"    gl_FragColor = vVaryingColor;  \n"
+			"    gl_FragColor = vVaryingColor * texture2D(uTex, vTexCoord);\n"
 			"}                                  \n";
-
 	gl.display = eglGetDisplay(gbm.dev);
 
 	if (!eglInitialize(gl.display, &major, &minor)) {
 		printf("failed to initialize\n");
 		return -1;
 	}
+
+	#define get_proc(name) do { \
+		gl.name = (void *)eglGetProcAddress(#name); \
+		assert(gl.name); \
+	} while (0)
+
+	get_proc(eglCreateImageKHR);
+	get_proc(eglDestroyImageKHR);
+	get_proc(glEGLImageTargetTexture2DOES);
 
 	printf("Using display %p with EGL version %d.%d\n",
 			gl.display, major, minor);
@@ -536,25 +557,104 @@ static int init_gl(void)
 	gl.modelviewmatrix = glGetUniformLocation(gl.program, "modelviewMatrix");
 	gl.modelviewprojectionmatrix = glGetUniformLocation(gl.program, "modelviewprojectionMatrix");
 	gl.normalmatrix = glGetUniformLocation(gl.program, "normalMatrix");
+	gl.texture = glGetUniformLocation(gl.program, "uTex");
 
 	glViewport(0, 0, drm.mode->hdisplay, drm.mode->vdisplay);
 	glEnable(GL_CULL_FACE);
 
 	gl.positionsoffset = 0;
-	gl.colorsoffset = sizeof(vVertices);
-	gl.normalsoffset = sizeof(vVertices) + sizeof(vColors);
+	gl.texcoordsoffset = sizeof(vVertices);
+	gl.normalsoffset = sizeof(vVertices) + sizeof(vTexCoords);
+
 	glGenBuffers(1, &gl.vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, gl.vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(vVertices) + sizeof(vColors) + sizeof(vNormals), 0, GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(vVertices) + sizeof(vTexCoords) + sizeof(vNormals), 0, GL_STATIC_DRAW);
 	glBufferSubData(GL_ARRAY_BUFFER, gl.positionsoffset, sizeof(vVertices), &vVertices[0]);
-	glBufferSubData(GL_ARRAY_BUFFER, gl.colorsoffset, sizeof(vColors), &vColors[0]);
+	glBufferSubData(GL_ARRAY_BUFFER, gl.texcoordsoffset, sizeof(vTexCoords), &vTexCoords[0]);
 	glBufferSubData(GL_ARRAY_BUFFER, gl.normalsoffset, sizeof(vNormals), &vNormals[0]);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (const GLvoid *)(intptr_t)gl.positionsoffset);
 	glEnableVertexAttribArray(0);
 	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (const GLvoid *)(intptr_t)gl.normalsoffset);
 	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, (const GLvoid *)(intptr_t)gl.colorsoffset);
+	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, (const GLvoid *)(intptr_t)gl.texcoordsoffset);
 	glEnableVertexAttribArray(2);
+
+	return 0;
+}
+
+#include "frame-512x512-RGBA.c"
+static const uint32_t texw = 512, texh = 512;
+
+static int get_fd_rgba_ccs(uint32_t *pstride)
+{
+	struct gbm_bo *bo;
+	void *map_data = NULL;
+	uint32_t stride;
+	extern const uint32_t raw_512x512_rgba[];
+	uint8_t *map, *src = (uint8_t *)raw_512x512_rgba;
+	uint8_t *src_ccs;
+	int fd, i;
+	uint64_t *mods;
+	int count = get_modifiers(&mods);
+	uint32_t ccsh = ALIGN(DIV_ROUND_UP(texh, 16), 32);
+
+	src_ccs = malloc(texw * ccsh * 4 * sizeof(uint8_t));
+	memset(src_ccs, 0x0C, texw * ccsh * 4 * sizeof(uint8_t));
+	bo = gbm_bo_create_with_modifiers(gbm.dev, texw, texh, GBM_FORMAT_ARGB8888,
+					  GBM_BO_USE_RENDERING, mods, count);
+	map = gbm_bo_map(bo, 0, 0, texw, texh + ccsh, GBM_BO_TRANSFER_WRITE, &stride, &map_data);
+
+	for (i = 0; i < texh; i++) {
+		memcpy(&map[stride * i], &src[texw * 4 * i], texw * 4);
+	}
+
+	for (; i < texh + ccsh; i++) {
+		memcpy(&map[stride * i], &src_ccs[texw * 4 * (i - texh)], texw * 4);
+	}
+
+	gbm_bo_unmap(bo, map_data);
+
+	fd = gbm_bo_get_fd(bo);
+
+	/* we have the fd now, no longer need the bo: */
+	gbm_bo_destroy(bo);
+
+	*pstride = stride;
+
+	return fd;
+}
+
+static int init_tex_rgba_ccs(void)
+{
+	uint32_t stride;
+	int fd = get_fd_rgba_ccs(&stride);
+	const EGLint attr[] = {
+		EGL_WIDTH, texw,
+		EGL_HEIGHT, texh,
+		EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ABGR8888,
+		EGL_DMA_BUF_PLANE0_FD_EXT, fd,
+		EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+		EGL_DMA_BUF_PLANE0_PITCH_EXT, stride,
+		EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, fourcc_mod_code(INTEL, 4) >> 32,
+		EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, (EGLint) fourcc_mod_code(INTEL, 4),
+		EGL_NONE
+	};
+	EGLImage img;
+
+	glGenTextures(1, gl.tex);
+
+	img = gl.eglCreateImageKHR(gl.display, EGL_NO_CONTEXT,
+			EGL_LINUX_DMA_BUF_EXT, NULL, attr);
+	assert(img);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_EXTERNAL_OES, gl.tex[0]);
+	glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	gl.glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, img);
+
+	gl.eglDestroyImageKHR(gl.display, img);
 
 	return 0;
 }
@@ -597,6 +697,7 @@ static void draw(uint32_t i)
 	glUniformMatrix4fv(gl.modelviewmatrix, 1, GL_FALSE, &modelview.m[0][0]);
 	glUniformMatrix4fv(gl.modelviewprojectionmatrix, 1, GL_FALSE, &modelviewprojection.m[0][0]);
 	glUniformMatrix3fv(gl.normalmatrix, 1, GL_FALSE, normal);
+	glUniform1i(gl.texture, 0);
 
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 	glDrawArrays(GL_TRIANGLE_STRIP, 4, 4);
@@ -633,11 +734,6 @@ static struct drm_fb * drm_fb_get_from_bo(struct gbm_bo *bo)
 	width = gbm_bo_get_width(bo);
 	height = gbm_bo_get_height(bo);
 
-#ifndef HAVE_GBM_MODIFIERS
-	strides[0] = gbm_bo_get_stride(bo);
-	handles[0] = gbm_bo_get_handle(bo).u32;
-	ret = -1;
-#else
 	uint64_t modifiers[4] = {0};
 	modifiers[0] = gbm_bo_get_modifier(bo);
 	const int num_planes = gbm_bo_get_plane_count(bo);
@@ -656,7 +752,6 @@ static struct drm_fb * drm_fb_get_from_bo(struct gbm_bo *bo)
 	ret = drmModeAddFB2WithModifiers(drm.fd, width, height,
 					 DRM_FORMAT_XRGB8888, handles, strides,
 					 offsets, modifiers, &fb->fb_id, flags);
-#endif
 	if (ret) {
 		if (flags)
 			fprintf(stderr, "Modifiers failed!\n");
@@ -718,6 +813,11 @@ int main(int argc, char *argv[])
 		return ret;
 	}
 
+	ret = init_tex_rgba_ccs();
+	if (ret) {
+		printf("failed to initialize EGLImage texture\n");
+		return ret;
+	}
 	/* clear the color buffer */
 	glClearColor(0.5, 0.5, 0.5, 1.0);
 	glClear(GL_COLOR_BUFFER_BIT);
